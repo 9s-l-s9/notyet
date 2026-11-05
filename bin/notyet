@@ -1,0 +1,7 @@
+#!/usr/bin/env -S guile --no-auto-compile -e main -s
+!#
+;;; notyet launcher: finds its modules next to itself when run from a checkout.
+(let ((root (dirname (dirname (canonicalize-path (car (command-line)))))))
+  (when (file-exists? (string-append root "/notyet/cli.scm"))
+    (set! %load-path (cons root %load-path))))
+(use-modules (notyet cli))
