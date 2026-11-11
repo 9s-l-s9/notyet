@@ -198,6 +198,16 @@ known one, UTC otherwise."
   (match (and=> (config-ref cfg 'export-dir #f) expand-home)
     (#f #t)
     (dir
+     ;; The sync timer and every change export; a lock keeps two runs from
+     ;; sharing the temporary directory (that once left an export without
+     ;; its marker, after which every export refused to replace it).
+     (mkdir-p (dirname dir))
+     (call-with-port (open-file (string-append dir ".notyet-lock") "a")
+       (lambda (lock)
+         (flock lock LOCK_EX)
+         (export-locked! cfg dir))))))
+
+(define (export-locked! cfg dir)
      (let* ((tmp (string-append dir ".notyet-new"))
             (old (string-append dir ".notyet-old"))
             (events (remove event-pool-type (load-events cfg)))
@@ -237,7 +247,7 @@ known one, UTC otherwise."
          (rename-file dir old))
        (rename-file tmp dir)
        (delete-tree old)
-       #t))))
+       #t))
 
 (define (mkdir-p dir)
   (unless (file-exists? dir)
