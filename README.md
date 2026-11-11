@@ -74,10 +74,22 @@ notyet edit QUERY... [--title] [--start] [--end] [--for] [--date] [--shift ±DUR
            [--location] [--desc] [--type] [--tag]... [--untag]... [--remind]...
 notyet tag +TAG -TAG [--] QUERY...
 notyet rm QUERY... [--confirm]
+notyet done QUERY...
+notyet carry [--days N] [QUERY...]
 notyet types | pool [add TYPE N] | sync | export
 ```
 
 Writes accept `--dry-run` and `--no-sync`.
+
+### To-dos that do not drop out of sight
+
+A to-do is an all-day event titled `To-do: …` or any event of type Fokus.
+`notyet done` marks one finished: tag `Erledigt`, title `Erledigt: …`
+(renaming it to `Erledigt: …` in the web UI counts as well). `notyet carry`
+moves every unfinished to-do of the last 7 days to today as an all-day
+`To-do: …`, noting `Offen seit DATE` (and the missed time block) in the
+description. It only touches days before today, so running it often is
+harmless; the calendar sync timer runs it after every sync.
 
 ## Configuration
 

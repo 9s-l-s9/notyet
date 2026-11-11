@@ -54,7 +54,9 @@ take a value (repeatable; all values kept in order), FLAGS do not.  A lone
 (define (words->query words)
   ;; Keep each shell word whole: re-quote words with spaces.
   (string-join (map (lambda (w)
-                      (if (and (string-index w #\space) (not (string-index w #\")))
+                      (if (and (string-index w #\space) (not (string-index w #\"))
+                               ;; "(a or b)" passed as one shell word is a subquery
+                               (not (string-prefix? "(" (string-trim w))))
                           (let ((i (string-index w #\:)))
                             (if (and i (not (string-index (substring w 0 i) #\space)))
                                 (string-append (substring w 0 (+ i 1)) "\""
@@ -516,6 +518,85 @@ known one, UTC otherwise."
             (format #t "deleted: ~a~%" (occ-line o cfg))
             (after-change cfg opts))))))
 
+(define %todo-prefix "To-do: ")
+(define %done-prefix "Erledigt: ")
+(define %done-tag "Erledigt")
+
+(define (open-todo? e cfg)
+  "A task of your own: type Fokus (a work block or an all-day to-do) or an
+all-day event titled To-do:, not tagged Erledigt, not recurring, not an
+invitation."
+  (and (not (event-recurring? e))
+       (not (event-foreign? e cfg))
+       (not (member %done-tag (event-tags e)))
+       (not (string-prefix? %done-prefix (event-summary e)))
+       (or (member "Fokus" (event-tags e))
+           (and (event-all-day? e) (string-prefix? %todo-prefix (event-summary e))))))
+
+(define (cmd-carry args)
+  ;; notyet carry [--days N] [--dry-run]: move open to-dos and missed Fokus
+  ;; blocks of the last N days (default 7) to today, so nothing undone drops out of sight.
+  (let-values (((opts words) (parse-args args '("days") '("dry-run" "no-sync"))))
+    (let* ((cfg (load-config))
+           (today (day-start (current-time)))
+           (days (or (and=> (opt opts "days") string->number) 7))
+           (occs (select cfg (words->query words)
+                         #:default-window (cons (add-days today (- days)) today)))
+           (es (filter (lambda (e) (and (< (event-start e) today) (open-todo? e cfg)))
+                       (distinct-events occs))))
+      (if (null? es)
+          (format #t "nothing to carry~%")
+          (begin
+            (for-each
+             (lambda (e)
+               (let* ((comp (event-comp e))
+                      (from (format-date (event-start e)))
+                      (desc (or (component-text comp "DESCRIPTION") ""))
+                      (note (string-append "Offen seit " from
+                                           (if (event-all-day? e) ""
+                                               (string-append " (Block " (format-time (event-start e))
+                                                              "-" (format-time (event-end e)) ")"))))
+                      (title (event-summary e))
+                      ;; A missed work block comes back as an all-day to-do.
+                      (comp (if (string-prefix? %todo-prefix title) comp
+                                (component-set-text comp "SUMMARY" (string-append %todo-prefix title))))
+                      (comp (set-times comp today (add-days today 1) #t #f))
+                      (comp (if (string-contains desc "Offen seit ")
+                                comp
+                                (component-set-text
+                                 comp "DESCRIPTION"
+                                 (if (string-null? desc) note (string-append note "\n" desc)))))
+                      (comp (touch comp))
+                      (vcal (event-with-comp e comp)))
+                 (format #t "carried: ~a  ~a -> ~a~%" (event-summary e) from (format-date today))
+                 (unless (opt opts "dry-run") (write-vcal! (event-file e) vcal))))
+             es)
+            (unless (opt opts "dry-run") (after-change cfg opts)))))))
+
+(define (cmd-done args)
+  ;; notyet done QUERY: tag Erledigt and rename "To-do: X" to "Erledigt: X".
+  (let-values (((opts words) (parse-args args '() '("dry-run" "no-sync"))))
+    (let* ((cfg (load-config))
+           (q (words->query words))
+           (check (when (string-null? (string-trim-both q)) (fail "which to-do? give search terms")))
+           (occs (select cfg q))
+           (e (one-event occs cfg "done"))
+           (title (event-summary e))
+           (title (cond ((string-prefix? %done-prefix title) title)
+                        ((string-prefix? %todo-prefix title)
+                         (string-append %done-prefix (substring title (string-length %todo-prefix))))
+                        (else (string-append %done-prefix title))))
+           (comp (event-comp e))
+           (comp (component-set-text comp "SUMMARY" title))
+           (comp (set-tags comp (edit-tags (event-tags e) (list %done-tag) '())))
+           (comp (touch comp))
+           (vcal (event-with-comp e comp)))
+      (check-own e cfg opts "marking it done")
+      (format #t "done: ~a~%" title)
+      (unless (opt opts "dry-run")
+        (write-vcal! (event-file e) vcal)
+        (after-change cfg opts)))))
+
 (define (cmd-pool args)
   (let ((cfg (load-config)))
     (match args
@@ -580,6 +661,9 @@ notyet — search and edit a calendar the way notmuch handles mail
              [--type T] [--tag T]... [--untag T]... [--remind DUR|none]...
              [--all-day] [--force] [--dry-run]
   notyet tag +TAG -TAG QUERY...
+  notyet done QUERY...                tag Erledigt, \"To-do: X\" -> \"Erledigt: X\"
+  notyet carry [--days N] [QUERY...]  open to-dos and Fokus blocks (not Erledigt)
+                                      of the last N days (7) -> today, all-day
   notyet rm QUERY... [--confirm] [--force]
   notyet types | pool [add TYPE N] | sync | export
 
@@ -616,6 +700,8 @@ DUR:  90m, 1h30m, 2d, 1w
           (((or "new" "add") . rest) (cmd-new rest))
           (("edit" . rest) (cmd-edit rest))
           (("tag" . rest) (cmd-tag rest))
+          (("carry" . rest) (cmd-carry rest))
+          (("done" . rest) (cmd-done rest))
           (((or "rm" "delete") . rest) (cmd-rm rest))
           (("pool" . rest) (cmd-pool rest))
           (("types") (cmd-types))
